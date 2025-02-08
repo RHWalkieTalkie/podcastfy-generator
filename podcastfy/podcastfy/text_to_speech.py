@@ -7,9 +7,11 @@ including cleaning of input text and merging of audio files.
 """
 
 import io
+import json
 import logging
 import os
 import re
+import base64
 import tempfile
 from typing import List, Tuple, Optional, Dict, Any
 from pydub import AudioSegment
@@ -76,7 +78,7 @@ class TextToSpeech:
         logger.debug(f"Using provider config: {provider_config}")
         return provider_config
 
-    def convert_to_speech(self, text: str, output_file: str) -> None:
+    def convert_to_speech(self, text: str, output_file: str, transcript_file: str) -> None:
         """
         Convert input text to speech and save as an audio file.
 
@@ -142,22 +144,24 @@ class TextToSpeech:
                     raise
             else:
                 with tempfile.TemporaryDirectory(dir=self.temp_audio_dir) as temp_dir:
-                    audio_segments = self._generate_audio_segments(
+                    audio_segments, transcript_files = self._generate_audio_segments(
                         cleaned_text, temp_dir
                     )
                     self._merge_audio_files(audio_segments, output_file)
+                    self._merge_json_files(transcript_files, transcript_file)
                     logger.info(f"Audio saved to {output_file}")
 
         except Exception as e:
             logger.error(f"Error converting text to speech: {str(e)}")
             raise
 
-    def _generate_audio_segments(self, text: str, temp_dir: str) -> List[str]:
+    def _generate_audio_segments(self, text: str, temp_dir: str) -> List[Dict[str, str]]:
         """Generate audio segments for each Q&A pair."""
         qa_pairs = self.provider.split_qa(
             text, self.ending_message, self.provider.get_supported_tags()
         )
         audio_files = []
+        transcript_files = []
         provider_config = self._get_provider_config()
 
         for idx, (question, answer) in enumerate(qa_pairs, 1):
@@ -165,15 +169,22 @@ class TextToSpeech:
                 temp_file = os.path.join(
                     temp_dir, f"{idx}_{speaker_type}.{self.audio_format}"
                 )
+                temp_file2 = os.path.join(
+                    temp_dir, f"{idx}_{speaker_type}.txt"
+                )
                 voice = provider_config.get("default_voices", {}).get(speaker_type)
                 model = provider_config.get("model")
 
                 audio_data = self.provider.generate_audio(content, voice, model)
-                with open(temp_file, "wb") as f:
-                    f.write(audio_data)
+                decoded = base64.b64decode(audio_data["audio"])
+                with open(temp_file, 'wb') as f:
+                    f.write(decoded)
+                with open(temp_file2, "w", encoding='utf-8') as f:
+                    json.dump(audio_data["transcript"], f, ensure_ascii=False, indent=4)
                 audio_files.append(temp_file)
+                transcript_files.append(temp_file2)
 
-        return audio_files
+        return audio_files, transcript_files
 
     def _merge_audio_files(self, audio_files: List[str], output_file: str) -> None:
         """
@@ -215,6 +226,50 @@ class TextToSpeech:
             # Export the combined audio
             combined.export(output_file, format=self.audio_format)
             logger.info(f"Merged audio saved to {output_file}")
+
+        except Exception as e:
+            logger.error(f"Error merging audio files: {str(e)}")
+            raise
+
+    def _merge_json_files(self, input_files: List[str], output_file: str) -> None:
+        """
+        Merge multiple JSON files into a single JSON array file.
+
+        Args:
+            input_files: List of paths to JSON files to merge.
+            output_file: Path to save the merged JSON array.
+        """
+        try:
+            merged_data = []
+            offset = 0.0
+
+            for index, file_path in enumerate(input_files):
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    data = json.load(file)  # Load JSON content
+                    
+                    if not data:  # Skip empty lists
+                        continue
+                    
+                    # Adjust timestamps
+                    if index != 0:
+                        for word in data:
+                            word["start_time"] += offset
+                            word["end_time"] += offset
+                    
+                    # Update offset using the last word's end_time
+                    offset = data[-1]["end_time"]
+                    
+                    merged_data.extend(data)
+
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+            # Write merged data as a JSON array
+            with open(output_file, 'w', encoding='utf-8') as output:
+                json.dump(merged_data, output, indent=4)
+
+            logger.info(f"Merged JSON saved to {output_file}")
+
 
         except Exception as e:
             logger.error(f"Error merging audio files: {str(e)}")

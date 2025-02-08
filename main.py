@@ -1,16 +1,23 @@
+import time
+import uuid
 from duckduckgo_search import DDGS
+import sys
+sys.path.insert(0, '/home/keanu/royalhack/podcastfy-generator/podcastfy')
 from podcastfy.client import generate_podcast
 import requests
 import os
 import json
 import re
+import pathlib
+import io
 import dotenv
 import logging
+import zipfile
+from os.path import basename
 from openai import OpenAI
-from flask import Flask, request, Response, jsonify, send_file
+from flask import Flask, g, request, Response, jsonify, send_file
 
 dotenv.load_dotenv()
-
 
 # Logging
 logging.basicConfig(
@@ -20,6 +27,16 @@ logging.basicConfig(
 #logging.set(logging.ERROR)
 
 app = Flask(__name__)
+
+@app.before_request
+def log_route_start():
+    g.start_time = time.time()
+    
+@app.after_request
+def log_route_end(response):
+    route = request.endpoint
+    logging.info(f"{route} ended after {time.time() - g.pop('start_time', None)}")
+    return response
 
 
 AI_OPENAI_URL = os.getenv("AI_OPENAI_URL")
@@ -152,14 +169,26 @@ async def generate_audio():
     #+ [result['href'] for result in search_results]
 
     # Generate podcast
-    audio_file = generate_podcast(urls=[wikipedia_search_url], tts_model='elevenlabs')
+    audio_file, transcript_file = generate_podcast(urls=[wikipedia_search_url], tts_model='elevenlabs')
 
+    base_files = [audio_file, transcript_file]
+    zip_file_path = f'./data/{uuid.uuid4().hex}.zip'
+    
+    # generate random uuid
+    #
+
+    #base_path = pathlib.Path('./data/')
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, mode='w') as z:
+        z.write(audio_file)
+        z.write(transcript_file)
+    data.seek(0)
     return send_file(
-         audio_file, 
-         mimetype="audio/mp3", 
-         as_attachment=True, 
-         attachment_filename="podcast.mp3")
-
+        data,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='data.zip'
+    )
 
 if __name__ == "__main__":
     app.run(port=6869, debug=True)

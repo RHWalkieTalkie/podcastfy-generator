@@ -131,13 +131,20 @@ def process_content(
                 conversation_config=conv_config.to_dict(),
             )
 
-            random_filename = f"podcast_{uuid.uuid4().hex}.mp3"
+            random_uuid = uuid.uuid4().hex
+            random_filename = f"podcast_{random_uuid}.mp3"
+            random_transcript = f"transcript_{random_uuid}.txt"
             audio_file = os.path.join(
                 output_directories.get("audio", "data/audio"), random_filename
             )
-            text_to_speech.convert_to_speech(qa_content, audio_file)
+            
+            transcript_file = os.path.join(
+                output_directories.get("transcripts", "data/transcripts"), random_transcript
+            )
+            
+            text_to_speech.convert_to_speech(qa_content, audio_file, transcript_file)
             logger.info(f"Podcast generated successfully using {tts_model} TTS model")
-            return audio_file
+            return audio_file, transcript_file
         else:
             logger.info(f"Transcript generated successfully: {transcript_filepath}")
             return transcript_filepath
